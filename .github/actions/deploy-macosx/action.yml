@@ -1,0 +1,39 @@
+name: Deploy on Mac OS X
+runs:
+  using: composite
+  steps:
+    - name: Install environment
+      shell: bash
+      run: |
+        brew install ccache gcc swig autoconf-archive automake cmake libomp libtool libusb ant maven nasm xz pkg-config sdl gpg1 bison flex perl ragel
+
+    - name: Build project
+      shell: bash
+      run: |
+        git --version
+        clang --version
+        /usr/local/bin/gcc-? --version
+        mvn -version
+        cmake --version
+        gpg --version
+        df -h
+
+        echo Fetching $GITHUB_REPOSITORY@$GITHUB_SHA and cloning bytedeco/javacpp-presets
+        REPO=$(basename $(pwd))
+        git init
+        git fetch --depth 1 https://github.com/$GITHUB_REPOSITORY $GITHUB_SHA
+        git checkout $GITHUB_SHA
+        cd ..
+        git clone --depth 1 https://github.com/bytedeco/javacpp-presets
+        cp -a $REPO javacpp-presets
+        cd javacpp-presets/$REPO
+
+        mkdir -p $HOME/.m2
+        [[ "${{ github.event_name }}" == "push" ]] && MAVEN_PHASE=deploy || MAVEN_PHASE=install
+        echo "<settings><servers><server><id>sonatype-nexus-snapshots</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server><server><id>sonatype-nexus-staging</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server></servers></settings>" > $HOME/.m2/settings.xml
+        export MAKEJ=$(getconf _NPROCESSORS_ONLN)
+        echo Executing Maven $MAVEN_PHASE on $MAKEJ processors
+        mvn clean $MAVEN_PHASE -B -U -e -Djavacpp.platform=$CI_DEPLOY_PLATFORM -Djavacpp.platform.extension=${{ matrix.ext }}
+        mvn clean $MAVEN_PHASE -B -U -e -Djavacpp.platform=$CI_DEPLOY_PLATFORM -Djavacpp.platform.extension=${{ matrix.ext }} -f platform/${{ matrix.ext }}/pom.xml
+        df -h
+

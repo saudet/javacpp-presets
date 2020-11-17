@@ -1,0 +1,92 @@
+name: Deploy on Ubuntu
+runs:
+  using: composite
+  steps:
+    - name: Install environment
+      shell: bash
+      run: |
+        if [[ "$CI_DEPLOY_PLATFORM" == "linux-armhf" ]]; then
+          export ARCH=armhf
+          export PREFIX=arm-linux-gnueabihf
+        elif [[ "$CI_DEPLOY_PLATFORM" == "linux-arm64" ]]; then
+          export ARCH=arm64
+          export PREFIX=aarch64-linux-gnu
+        elif [[ "$CI_DEPLOY_PLATFORM" == "linux-ppc64le" ]]; then
+          export ARCH=ppc64el
+          export PREFIX=powerpc64le-linux-gnu
+        fi
+        echo "ARCH=$ARCH" >> $GITHUB_ENV
+        echo "PREFIX=$PREFIX" >> $GITHUB_ENV
+        echo "MAVEN_OPTIONS=-Djavacpp.platform.compiler=$PREFIX-g++ -Djava.library.path=/usr/$PREFIX/lib/:/usr/lib/$PREFIX/" >> $GITHUB_ENV
+
+        dpkg --add-architecture $ARCH
+        echo deb [arch=$ARCH] http://ports.ubuntu.com/ubuntu-ports xenial main restricted universe multiverse >> /etc/apt/sources.list
+        echo deb [arch=$ARCH] http://ports.ubuntu.com/ubuntu-ports xenial-updates main restricted universe multiverse >> /etc/apt/sources.list
+        echo deb [arch=$ARCH] http://ports.ubuntu.com/ubuntu-ports xenial-backports main restricted universe multiverse >> /etc/apt/sources.list
+        echo deb [arch=$ARCH] http://ports.ubuntu.com/ubuntu-ports xenial-security main restricted universe multiverse >> /etc/apt/sources.list
+        echo deb [arch=amd64] http://ppa.launchpad.net/openjdk-r/ppa/ubuntu xenial main >> /etc/apt/sources.list
+        sed -i 's/deb http/deb [arch=i386,amd64] http/g' /etc/apt/sources.list
+        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys EB9B1D8886F44E2A
+        apt-get update
+        apt-get -y install python python2.7 python-minimal python2.7-minimal libgtk2.0-dev:$ARCH libasound2-dev:$ARCH libusb-dev:$ARCH libusb-1.0-0-dev:$ARCH libffi-dev:$ARCH zlib1g-dev:$ARCH libxcb1-dev:$ARCH
+        apt-get -y install pkg-config ccache gcc-$PREFIX g++-$PREFIX gfortran-$PREFIX linux-libc-dev-$ARCH-cross binutils-multiarch openjdk-8-jdk-headless ant python python-dev swig git file wget unzip tar bzip2 patch autoconf-archive autogen automake make libtool bison flex perl nasm curl cmake libffi-dev zlib1g-dev
+
+        curl -L https://downloads.apache.org/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz -o /root/apache-maven-3.6.3-bin.tar.gz
+        tar -xzf /root/apache-maven-3.6.3-bin.tar.gz -C /opt/
+        ln -sf /opt/apache-maven-3.6.3/bin/mvn /usr/bin/mvn
+
+        if [[ "$CI_DEPLOY_PLATFORM" == "linux-armhf" ]] && [[ -z ${CI_DEPLOY_NEED_CPP11:-} ]]; then
+          echo Setting up tools for linux-armhf build
+          dpkg --add-architecture i386
+          apt-get update
+          apt-get -y install libc6:i386 libncurses5:i386 libstdc++6:i386 lib32z1
+          apt-get -y install ccache clang git file wget unzip tar bzip2 gzip patch autoconf-archive autogen automake libtool bison flex perl nasm libasound2-dev freeglut3-dev libgtk2.0-dev libusb-dev libffi-dev zlib1g-dev
+          curl -L https://github.com/raspberrypi/tools/archive/master.tar.gz -o /root/tools-master.tar.gz
+          curl -L https://github.com/raspberrypi/userland/archive/master.tar.gz -o /root/userland-master.tar.gz
+          mkdir -p /root/tools /root/userland
+          tar -xzf /root/tools-master.tar.gz --strip-components=1 -C /root/tools
+          tar -xzf /root/userland-master.tar.gz --strip-components=1 -C /root/userland
+          ln -s /root/tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian/bin/arm-linux-gnueabihf-gfortran /root/tools/arm-bcm2708/arm-rpi-4.9.3-linux-gnueabihf/bin/
+          ln -s /root/tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian/arm-linux-gnueabihf/lib/libgfortran* /root/tools/arm-bcm2708/arm-rpi-4.9.3-linux-gnueabihf/arm-linux-gnueabihf/lib/
+          export PATH=/root/tools/arm-bcm2708/arm-rpi-4.9.3-linux-gnueabihf/bin/:$PATH
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          echo "MAVEN_OPTIONS=-Djavacpp.platform.compiler=arm-linux-gnueabihf-g++ -Djava.library.path=/root/tools/arm-bcm2708/arm-rpi-4.9.3-linux-gnueabihf/arm-linux-gnueabihf/lib/" >> $GITHUB_ENV
+
+          pushd /root/userland
+          # https://github.com/raspberrypi/userland/issues/603
+          sed -i -e 's/"${INSTALL_TARGETS} vcilcs"/${INSTALL_TARGETS} vcilcs/g' interface/vmcs_host/CMakeLists.txt
+          bash buildme
+          popd
+        fi
+
+    - name: Build project
+      shell: bash
+      run: |
+        git --version
+        $PREFIX-gcc --version
+        mvn -version
+        cmake --version
+        gpg --version
+        df -h
+
+        echo Fetching $GITHUB_REPOSITORY@$GITHUB_SHA and cloning bytedeco/javacpp-presets
+        REPO=$(basename $(pwd))
+        git init
+        git fetch --depth 1 https://github.com/$GITHUB_REPOSITORY $GITHUB_SHA
+        git checkout $GITHUB_SHA
+        cd ..
+        git clone --depth 1 https://github.com/bytedeco/javacpp-presets
+        cp -a $REPO javacpp-presets
+        cd javacpp-presets/$REPO
+
+        echo "Fixing HOME to /root (was '$HOME')"
+        export HOME=/root
+        mkdir -p $HOME/.m2
+        [[ "${{ github.event_name }}" == "push" ]] && MAVEN_PHASE=deploy || MAVEN_PHASE=install
+        echo "<settings><servers><server><id>sonatype-nexus-snapshots</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server><server><id>sonatype-nexus-staging</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server></servers></settings>" > $HOME/.m2/settings.xml
+        export MAKEJ=$(getconf _NPROCESSORS_ONLN)
+        echo Executing Maven $MAVEN_PHASE on $MAKEJ processors
+        mvn clean $MAVEN_PHASE -B -U -e -Djavacpp.platform=$CI_DEPLOY_PLATFORM -Djavacpp.platform.extension=${{ matrix.ext }} $MAVEN_OPTIONS
+        mvn clean $MAVEN_PHASE -B -U -e -Djavacpp.platform=$CI_DEPLOY_PLATFORM -Djavacpp.platform.extension=${{ matrix.ext }} -f platform/${{ matrix.ext }}/pom.xml
+        df -h
+

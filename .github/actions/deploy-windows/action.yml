@@ -1,0 +1,54 @@
+name: Deploy on Windows
+runs:
+  using: composite
+  steps:
+    - name: Install environment
+      shell: cmd
+      run: |
+        C:\msys64\usr\bin\bash -lc "pacman -S --needed --noconfirm base-devel git tar pkg-config unzip p7zip zip autoconf autoconf-archive automake make patch gnupg"
+        C:\msys64\usr\bin\bash -lc "pacman -S --needed --noconfirm mingw-w64-x86_64-nasm mingw-w64-x86_64-toolchain mingw-w64-x86_64-libtool mingw-w64-x86_64-gcc mingw-w64-i686-gcc mingw-w64-x86_64-gcc-fortran mingw-w64-i686-gcc-fortran mingw-w64-x86_64-libwinpthread-git mingw-w64-i686-libwinpthread-git mingw-w64-x86_64-SDL mingw-w64-i686-SDL mingw-w64-x86_64-ragel"
+        echo Removing broken version of Bash from WSL
+        rm "C:/WINDOWS/system32/bash.EXE"
+
+    - name: Build project
+      shell: cmd
+      run: |
+        if "%CI_DEPLOY_PLATFORM%"=="windows-x86_64" (
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64
+          set MSYSTEM=MINGW64
+        )
+        if "%CI_DEPLOY_PLATFORM%"=="windows-x86" (
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86
+          set MSYSTEM=MINGW32
+        )
+        SET "PATH=C:\msys64\%MSYSTEM%\bin;C:\msys64\usr\bin;%PATH%"
+        bash --version
+        git --version
+        cl
+        gcc --version
+        call mvn -version
+        cmake --version
+        gpg --version
+        df -h
+        wmic pagefile list /format:list
+
+        echo Fetching %GITHUB_REPOSITORY%@%GITHUB_SHA% and cloning bytedeco/javacpp-presets
+        for %%* in (.) do set REPO=%%~n*
+        git init
+        git fetch --depth 1 https://github.com/%GITHUB_REPOSITORY% %GITHUB_SHA%
+        git checkout %GITHUB_SHA%
+        cd ..
+        git clone --depth 1 https://github.com/bytedeco/javacpp-presets
+        cp -a %REPO% javacpp-presets
+        cd javacpp-presets/%REPO%
+
+        mkdir %USERPROFILE%\.m2
+        if "${{ github.event_name }}"=="push" (set MAVEN_PHASE=deploy) else (set MAVEN_PHASE=install)
+        echo ^<settings^>^<servers^>^<server^>^<id^>sonatype-nexus-snapshots^</id^>^<username^>%CI_DEPLOY_USERNAME%^</username^>^<password^>%CI_DEPLOY_PASSWORD%^</password^>^</server^>^<server^>^<id^>sonatype-nexus-staging^</id^>^<username^>%CI_DEPLOY_USERNAME%^</username^>^<password^>%CI_DEPLOY_PASSWORD%^</password^>^</server^>^</servers^>^</settings^> > %USERPROFILE%\.m2\settings.xml
+        set MAKEJ=%NUMBER_OF_PROCESSORS%
+        echo Executing Maven %MAVEN_PHASE% on %MAKEJ% processors
+        call mvn clean %MAVEN_PHASE% -B -U -e -Djavacpp.platform=%CI_DEPLOY_PLATFORM% -Djavacpp.platform.extension=${{ matrix.ext }}
+        call mvn clean %MAVEN_PHASE% -B -U -e -Djavacpp.platform=%CI_DEPLOY_PLATFORM% -Djavacpp.platform.extension=${{ matrix.ext }} -f platform/${{ matrix.ext }}/pom.xml
+        if ERRORLEVEL 1 exit /b
+        df -h
+        wmic pagefile list /format:list

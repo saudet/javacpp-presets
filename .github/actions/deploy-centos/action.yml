@@ -1,0 +1,73 @@
+name: Deploy on CentOS
+runs:
+  using: composite
+  steps:
+    - name: Install environment
+      shell: bash
+      run: |
+        CENTOS_VERSION=$(rpm --eval '%{centos_ver}')
+        [[ "CENTOS_VERSION" == "6" ]] && SCL_ENABLE="devtoolset-7 rh-python36 python27" || SCL_ENABLE="devtoolset-7"
+        echo "SCL_ENABLE=$SCL_ENABLE" >> $GITHUB_ENV
+
+        yum -y update
+        yum -y install centos-release-scl-rh epel-release
+        yum -y install $SCL_ENABLE rh-java-common-ant ccache clang gcc-c++ gcc-gfortran java-1.8.0-openjdk-devel python python36-devel python36-pip swig file which wget unzip tar bzip2 gzip xz patch autoconf-archive automake make libtool bison flex perl nasm alsa-lib-devel freeglut-devel gtk2-devel libusb-devel libusb1-devel curl-devel expat-devel gettext-devel openssl-devel zlib-devel SDL-devel libva-devel libxkbcommon-devel libxkbcommon-x11-devel xcb-util* fontconfig-devel libffi-devel ragel ocl-icd-devel
+
+        curl -L https://github.com/Kitware/CMake/releases/download/v3.16.6/cmake-3.16.6-Linux-x86_64.tar.gz -o /root/cmake-3.16.6-Linux-x86_64.tar.gz
+        curl -L https://downloads.apache.org/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz -o /root/apache-maven-3.6.3-bin.tar.gz
+        curl -L https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.18.3.tar.gz -o /root/git-2.18.3.tar.gz
+        tar -xzf /root/cmake-3.16.6-Linux-x86_64.tar.gz -C /opt/
+        tar -xzf /root/apache-maven-3.6.3-bin.tar.gz -C /opt/
+        tar -xzf /root/git-2.18.3.tar.gz -C /root/
+        cd /root/git-2.18.3; make -j2 prefix=/usr/local/; make -j2 prefix=/usr/local/ install
+        ln -sf /usr/bin/python3.6 /usr/bin/python3
+        ln -sf /opt/cmake-3.16.6-Linux-x86_64/bin/* /usr/bin/
+        ln -sf /opt/apache-maven-3.6.3/bin/mvn /usr/bin/mvn
+
+        if [[ $CI_DEPLOY_PLATFORM == android-* ]]; then
+          curl -L https://dl.google.com/android/repository/android-ndk-r21d-linux-x86_64.zip -o /root/android-ndk.zip
+          unzip -qq /root/android-ndk.zip -d /root/
+          ln -sf /root/android-ndk-* /root/android-ndk
+          echo "MAVEN_OPTIONS=-Djavacpp.platform.root=/root/android-ndk/ -Djava.library.path=" >> $GITHUB_ENV
+        fi
+
+        if [[ $CI_DEPLOY_PLATFORM == "linux-x86" ]]; then
+          rpm -qa | sed s/.x86_64$/.i686/ | xargs yum -q -y install
+          wget --no-directories --no-parent -r https://www.repo.cloudlinux.com/cloudlinux/$CENTOS_VERSION/sclo/devtoolset-7/i386/ -P /root
+          rpm -i --force --nodeps /root/*.rpm
+        fi
+
+        rm -f /usr/lib/libgfortran.so.3* /usr/lib64/libgfortran.so.3* # not required for GCC 7+
+
+    - name: Build project
+      shell: bash
+      run: |
+        source scl_source enable $SCL_ENABLE rh-git218 rh-java-common rh-maven35 || true
+        git --version
+        gcc --version
+        mvn -version
+        cmake --version
+        gpg --version
+        df -h
+
+        echo Fetching $GITHUB_REPOSITORY@$GITHUB_SHA and cloning bytedeco/javacpp-presets
+        REPO=$(basename $(pwd))
+        git init
+        git fetch --depth 1 https://github.com/$GITHUB_REPOSITORY $GITHUB_SHA
+        git checkout $GITHUB_SHA
+        cd ..
+        git clone --depth 1 https://github.com/bytedeco/javacpp-presets
+        cp -a $REPO javacpp-presets
+        cd javacpp-presets/$REPO
+
+        echo "Fixing HOME to /root (was '$HOME')"
+        export HOME=/root
+        mkdir -p $HOME/.m2
+        [[ "${{ github.event_name }}" == "push" ]] && MAVEN_PHASE=deploy || MAVEN_PHASE=install
+        echo "<settings><servers><server><id>sonatype-nexus-snapshots</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server><server><id>sonatype-nexus-staging</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server></servers></settings>" > $HOME/.m2/settings.xml
+        export MAKEJ=$(getconf _NPROCESSORS_ONLN)
+        echo Executing Maven $MAVEN_PHASE on $MAKEJ processors
+        mvn clean $MAVEN_PHASE -B -U -e -Djavacpp.platform=$CI_DEPLOY_PLATFORM -Djavacpp.platform.extension=${{ matrix.ext }} $MAVEN_OPTIONS
+        mvn clean $MAVEN_PHASE -B -U -e -Djavacpp.platform=$CI_DEPLOY_PLATFORM -Djavacpp.platform.extension=${{ matrix.ext }} -f platform/${{ matrix.ext }}/pom.xml
+        df -h
+
