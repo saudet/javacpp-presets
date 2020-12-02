@@ -63,14 +63,13 @@ runs:
         REPOSITORY_ID="sonatype-nexus-snapshots"
         REPOSITORY_URL="https://oss.sonatype.org/content/repositories/snapshots/"
         MAVEN_OPTIONS="-N -B -U -e -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3"
-        REDEPLOY_STATUS=0
 
         rm -f dependencies.txt
         for POM in $(find $CI_DEPLOY_MODULE/platform/ -iname pom.xml); do
             if [[ $POM =~ tensorflow/platform/python ]]; then
                 continue # Skip over TensorFlow builds with Python taking more than 6 hours on GitHub Actions
             fi
-            mvn dependency:list $MAVEN_OPTIONS -DexcludeTransitive -DappendOutput -DoutputFile=$(pwd)/dependencies.txt -f $POM || REDEPLOY_STATUS=$?
+            mvn dependency:list $MAVEN_OPTIONS -DexcludeTransitive -DappendOutput -DoutputFile=$(pwd)/dependencies.txt -f $POM
         done
 
         for LINE in $(sort -u dependencies.txt); do
@@ -95,12 +94,11 @@ runs:
                     cp -v $HOME/.m2/repository/${GROUP//.//}/$ARTIFACT/$VERSION/$FILE .
                     unzip -o $FILE META-INF/maven/$GROUP/$ARTIFACT/pom.xml
                     mvn deploy:deploy-file $MAVEN_OPTIONS -DrepositoryId=$REPOSITORY_ID -Durl=$REPOSITORY_URL -DpomFile=META-INF/maven/$GROUP/$ARTIFACT/pom.xml \
-                            -Dfile=$FILE -DgroupId=$GROUP -DartifactId=$ARTIFACT -Dversion=$VERSION -Dfiles=$FILES -Dtypes=$TYPES -Dclassifiers=$CLASSIFIERS || REDEPLOY_STATUS=$?
+                            -Dfile=$FILE -DgroupId=$GROUP -DartifactId=$ARTIFACT -Dversion=$VERSION -Dfiles=$FILES -Dtypes=$TYPES -Dclassifiers=$CLASSIFIERS
                 fi
             fi
         done
         df -h
-        exit $REDEPLOY_STATUS
 
     - name: Save cache
       shell: bash

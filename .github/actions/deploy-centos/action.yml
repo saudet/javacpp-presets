@@ -141,6 +141,11 @@ runs:
         echo "<mirrors><mirror><id>google-maven-central</id><name>GCS Maven Central mirror</name><url>https://maven-central.storage-download.googleapis.com/maven2/</url><mirrorOf>central</mirrorOf></mirror></mirrors>" >> $HOME/.m2/settings.xml
         echo "<servers><server><id>sonatype-nexus-snapshots</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server><server><id>sonatype-nexus-staging</id><username>$CI_DEPLOY_USERNAME</username><password>$CI_DEPLOY_PASSWORD</password></server></servers>" >> $HOME/.m2/settings.xml
         echo "</settings>" >> $HOME/.m2/settings.xml
+
+        SECONDS=$(( RANDOM % 300 ))
+        echo Sleeping $SECONDS seconds to help avoid race conditions with Maven
+        sleep $SECONDS
+
         export MAKEJ=$(getconf _NPROCESSORS_ONLN)
         echo Executing Maven $MAVEN_PHASE on $MAKEJ processors
         export EXT=${{ matrix.ext }}
