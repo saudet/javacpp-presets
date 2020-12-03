@@ -69,7 +69,11 @@ runs:
             if [[ $POM =~ tensorflow/platform/python ]]; then
                 continue # Skip over TensorFlow builds with Python taking more than 6 hours on GitHub Actions
             fi
-            mvn dependency:list $MAVEN_OPTIONS -DexcludeTransitive -DappendOutput -DoutputFile=$(pwd)/dependencies.txt -f $POM
+            STATUS=0
+            for i in {1..5}; do
+                mvn dependency:list $MAVEN_OPTIONS -DexcludeTransitive -DappendOutput -DoutputFile=$(pwd)/dependencies.txt -f $POM && break || STATUS=$? && sleep 60
+            done
+            (exit $STATUS)
         done
 
         for LINE in $(sort -u dependencies.txt); do
@@ -93,8 +97,12 @@ runs:
                     FILE=$ARTIFACT-$VERSION.jar
                     cp -v $HOME/.m2/repository/${GROUP//.//}/$ARTIFACT/$VERSION/$FILE .
                     unzip -o $FILE META-INF/maven/$GROUP/$ARTIFACT/pom.xml
-                    mvn deploy:deploy-file $MAVEN_OPTIONS -DrepositoryId=$REPOSITORY_ID -Durl=$REPOSITORY_URL -DpomFile=META-INF/maven/$GROUP/$ARTIFACT/pom.xml \
-                            -Dfile=$FILE -DgroupId=$GROUP -DartifactId=$ARTIFACT -Dversion=$VERSION -Dfiles=$FILES -Dtypes=$TYPES -Dclassifiers=$CLASSIFIERS
+                    STATUS=0
+                    for i in {1..5}; do
+                        mvn deploy:deploy-file $MAVEN_OPTIONS -DrepositoryId=$REPOSITORY_ID -Durl=$REPOSITORY_URL -DpomFile=META-INF/maven/$GROUP/$ARTIFACT/pom.xml \
+                            -Dfile=$FILE -DgroupId=$GROUP -DartifactId=$ARTIFACT -Dversion=$VERSION -Dfiles=$FILES -Dtypes=$TYPES -Dclassifiers=$CLASSIFIERS && break || STATUS=$? && sleep 60
+                    done
+                    (exit $STATUS)
                 fi
             fi
         done
